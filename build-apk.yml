@@ -1,0 +1,89 @@
+run-name: build-${{ inputs.job_id }}
+
+name: Flutter APK Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "ID job dari Telegram bot"
+        required: true
+        type: string
+      zip_path:
+        description: "Path ZIP source di dalam repo"
+        required: true
+        type: string
+      artifact_name:
+        description: "Nama artifact output"
+        required: false
+        default: "apk-release"
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    name: build-${{ inputs.job_id }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
+
+      - name: Validate ZIP exists in repo
+        shell: bash
+        run: |
+          if [ ! -f "${{ inputs.zip_path }}" ]; then
+            echo "ZIP source tidak ditemukan di repo: ${{ inputs.zip_path }}"
+            find . -maxdepth 3 -type f | sort
+            exit 1
+          fi
+
+      - name: Extract ZIP source
+        run: |
+          mkdir -p work/src
+          unzip -o "${{ inputs.zip_path }}" -d work/src
+
+      - name: Detect Flutter project root
+        id: detect
+        shell: bash
+        run: |
+          ROOT=$(find work/src -maxdepth 6 -type f -name pubspec.yaml | head -n 1 | xargs -I{} dirname "{}")
+          if [ -z "$ROOT" ]; then
+            echo "pubspec.yaml tidak ditemukan"
+            find work/src -maxdepth 6 -type f | sort | head -200
+            exit 1
+          fi
+          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
+          echo "Project root: $ROOT"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter doctor
+        run: flutter doctor -v
+
+      - name: Get dependencies
+        working-directory: ${{ steps.detect.outputs.root }}
+        run: flutter pub get
+
+      - name: Build APK release
+        working-directory: ${{ steps.detect.outputs.root }}
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ steps.detect.outputs.root }}/build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
